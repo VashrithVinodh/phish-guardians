@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, ShieldCheck, Mail, Clock, Target, ArrowRight } from "lucide-react";
+import { AlertTriangle, ShieldCheck, Mail, Clock, Target, ArrowRight, CheckCircle } from "lucide-react";
 import { toast } from "sonner";
 
 interface Scenario {
@@ -67,6 +67,17 @@ const mockScenarios: Record<string, Scenario[]> = {
   ]
 };
 
+const phishingElements = [
+  { id: "urgency", label: "Urgency/Pressure Tactics", description: "Creates false sense of urgency" },
+  { id: "suspicious_link", label: "Suspicious Link/URL", description: "Unusual or mismatched domain" },
+  { id: "credential_request", label: "Credential Request", description: "Asks for passwords or personal info" },
+  { id: "suspicious_domain", label: "Suspicious Sender Domain", description: "Email address looks fake or altered" },
+  { id: "threatening_language", label: "Threats/Consequences", description: "Threatens account closure or penalties" },
+  { id: "generic_greeting", label: "Generic Greeting", description: "Uses 'Dear User' instead of your name" },
+  { id: "poor_grammar", label: "Poor Grammar/Spelling", description: "Contains obvious mistakes" },
+  { id: "unexpected_attachment", label: "Unexpected Attachment", description: "Suspicious file attachment" }
+];
+
 const Inbox = () => {
   const navigate = useNavigate();
   const [currentScenario, setCurrentScenario] = useState<Scenario | null>(null);
@@ -77,6 +88,11 @@ const Inbox = () => {
   const [highlightedBody, setHighlightedBody] = useState<string>("");
   const [completedCount, setCompletedCount] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
+  
+  // New states for phishing element selection
+  const [userAction, setUserAction] = useState<"report" | "trust" | null>(null);
+  const [selectedElements, setSelectedElements] = useState<string[]>([]);
+  const [showElementSelection, setShowElementSelection] = useState(false);
 
   const userId = localStorage.getItem("phishplay_user") || "demo";
   const theme = localStorage.getItem("phishplay_theme") || "sci_fi";
@@ -99,6 +115,9 @@ const Inbox = () => {
     setRiskScore(null);
     setDetectedCues([]);
     setHighlightedBody("");
+    setUserAction(null);
+    setSelectedElements([]);
+    setShowElementSelection(false);
   };
 
   const analyzeMessage = (scenario: Scenario) => {
@@ -117,7 +136,29 @@ const Inbox = () => {
     setHighlightedBody(highlighted);
   };
 
+  const toggleElementSelection = (elementId: string) => {
+    if (selectedElements.includes(elementId)) {
+      setSelectedElements(selectedElements.filter(e => e !== elementId));
+    } else {
+      setSelectedElements([...selectedElements, elementId]);
+    }
+  };
+
   const handleAction = (action: "report" | "trust") => {
+    if (!currentScenario) return;
+    
+    setUserAction(action);
+
+    // If user reports as phishing, show element selection
+    if (action === "report" && currentScenario.is_phishing) {
+      setShowElementSelection(true);
+    } else {
+      // If trusting or wrong report, proceed to analysis
+      submitFinalAnswer(action);
+    }
+  };
+
+  const submitFinalAnswer = (action: "report" | "trust") => {
     if (!currentScenario) return;
 
     const timeMs = Date.now() - startTime;
@@ -125,11 +166,23 @@ const Inbox = () => {
     setShowAnalysis(true);
 
     // Determine if correct
-    const correct = (action === "report" && currentScenario.is_phishing) || 
-                   (action === "trust" && !currentScenario.is_phishing);
+    const correctIdentification = (action === "report" && currentScenario.is_phishing) || 
+                                  (action === "trust" && !currentScenario.is_phishing);
     
+    // Calculate element selection accuracy
+    let elementScore = 0;
+    let elementPoints = 0;
+    if (action === "report" && currentScenario.is_phishing && selectedElements.length > 0) {
+      const correctElements = selectedElements.filter(el => currentScenario.cues.includes(el));
+      elementScore = correctElements.length;
+      elementPoints = elementScore * 5; // 5 points per correct element
+    }
+
+    const basePoints = correctIdentification ? 10 : 0;
+    const totalPoints = basePoints + elementPoints;
+
     const newCompleted = completedCount + 1;
-    const newCorrect = correct ? correctCount + 1 : correctCount;
+    const newCorrect = correctIdentification ? correctCount + 1 : correctCount;
     setCompletedCount(newCompleted);
     setCorrectCount(newCorrect);
 
@@ -141,18 +194,29 @@ const Inbox = () => {
       action,
       time_ms: timeMs,
       score: riskScore,
-      correct
+      correct: correctIdentification,
+      selected_elements: selectedElements,
+      element_score: elementScore,
+      total_points: totalPoints
     });
 
-    if (correct) {
-      toast.success("Correct! Well done!", {
-        description: `Response time: ${(timeMs / 1000).toFixed(1)}s`
+    if (correctIdentification) {
+      toast.success(`Correct! +${totalPoints} points`, {
+        description: elementPoints > 0 
+          ? `Identified ${elementScore}/${currentScenario.cues.length} phishing elements correctly`
+          : `Response time: ${(timeMs / 1000).toFixed(1)}s`
       });
     } else {
       toast.error("Incorrect", {
         description: "Review the analysis to learn more"
       });
     }
+  };
+
+  const handleSubmitElements = () => {
+    if (!userAction) return;
+    submitFinalAnswer(userAction);
+    setShowElementSelection(false);
   };
 
   const handleNext = () => {
@@ -217,7 +281,58 @@ const Inbox = () => {
                   }}
                 />
 
-                {!showAnalysis ? (
+                {/* Element Selection UI */}
+                {showElementSelection && !showAnalysis && (
+                  <div className="mb-6 p-6 bg-muted/50 rounded-lg border-2 border-primary/20">
+                    <div className="flex items-center gap-2 mb-4">
+                      <AlertTriangle className="w-5 h-5 text-destructive" />
+                      <h3 className="font-bold text-lg">Identify Phishing Elements</h3>
+                    </div>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Select all suspicious elements you found in this email. Each correct element earns 5 bonus points!
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                      {phishingElements.map((element) => (
+                        <button
+                          key={element.id}
+                          onClick={() => toggleElementSelection(element.id)}
+                          className={`p-4 rounded-lg border-2 text-left transition-all ${
+                            selectedElements.includes(element.id)
+                              ? 'bg-primary text-primary-foreground border-primary shadow-md'
+                              : 'bg-background border-border hover:border-primary/50'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5 ${
+                              selectedElements.includes(element.id)
+                                ? 'bg-primary-foreground border-primary-foreground'
+                                : 'border-muted-foreground'
+                            }`}>
+                              {selectedElements.includes(element.id) && (
+                                <CheckCircle className="w-4 h-4 text-primary" />
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <div className="font-semibold mb-1">{element.label}</div>
+                              <div className="text-xs opacity-80">{element.description}</div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    <Button
+                      onClick={handleSubmitElements}
+                      className="w-full bg-primary hover:bg-primary/90 py-6 text-lg"
+                      disabled={selectedElements.length === 0}
+                    >
+                      Submit Analysis ({selectedElements.length} element{selectedElements.length !== 1 ? 's' : ''} selected)
+                      <ArrowRight className="w-5 h-5 ml-2" />
+                    </Button>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                {!showAnalysis && !showElementSelection && (
                   <div className="flex gap-4">
                     <Button
                       onClick={() => handleAction("report")}
@@ -234,7 +349,10 @@ const Inbox = () => {
                       Trust Message
                     </Button>
                   </div>
-                ) : (
+                )}
+
+                {/* Next Button */}
+                {showAnalysis && (
                   <Button
                     onClick={handleNext}
                     className="w-full bg-primary hover:bg-primary/90 py-6 text-lg"
@@ -278,14 +396,35 @@ const Inbox = () => {
 
                     {detectedCues.length > 0 && (
                       <div>
-                        <h4 className="font-semibold mb-2">Detected Threats:</h4>
+                        <h4 className="font-semibold mb-3">Actual Phishing Elements:</h4>
                         <div className="space-y-2">
-                          {detectedCues.map((cue, idx) => (
-                            <Badge key={idx} variant="destructive" className="mr-2">
-                              {cue.replace(/_/g, " ")}
-                            </Badge>
-                          ))}
+                          {detectedCues.map((cue, idx) => {
+                            const wasSelected = selectedElements.includes(cue);
+                            return (
+                              <div key={idx} className="flex items-center gap-2">
+                                <Badge 
+                                  variant={wasSelected ? "default" : "destructive"}
+                                  className="flex-1"
+                                >
+                                  {cue.replace(/_/g, " ")}
+                                </Badge>
+                                {wasSelected ? (
+                                  <CheckCircle className="w-4 h-4 text-green-500" />
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">(Missed)</span>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
+                        {selectedElements.length > 0 && (
+                          <div className="mt-3 text-sm">
+                            <span className="font-medium">Your Score: </span>
+                            <span className="text-accent font-bold">
+                              {selectedElements.filter(el => detectedCues.includes(el)).length}/{detectedCues.length} correct
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
 
